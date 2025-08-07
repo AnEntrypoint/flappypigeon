@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Treetop Rescue Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+    <style>
+        body {
+            margin: 0; padding: 0; display: flex; justify-content: center; align-items: center;
+            height: 100vh; background-color: #333; font-family: 'Fredoka One', cursive; overflow: hidden;
+        }
+        #game-container {
+            position: relative; border-radius: 15px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2), 0 6px 6px rgba(0,0,0,0.25);
+            overflow: hidden;
+        }
+        #gameCanvas { display: block; background: linear-gradient(to top, #87CEEB, #2c3e50); }
+        .ui-element {
+            position: absolute; left: 50%; transform: translateX(-50%);
+            color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); text-align: center;
+        }
+        #score { top: 20px; font-size: 2.5rem; }
+        #message-box {
+            top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7); padding: 20px 40px; border-radius: 15px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-size: 1.5rem; line-height: 1.5; z-index: 10;
+        }
+        #message-box button {
+            font-family: 'Fredoka One', cursive; font-size: 1.2rem; padding: 10px 20px; margin-top: 20px;
+            border-radius: 10px; border: none; background-color: #FFC107; color: #333;
+            cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.2s ease;
+        }
+        #message-box button:hover { transform: translateY(-2px); box-shadow: 0 6px 8px rgba(0,0,0,0.25); }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="score" class="ui-element">0</div>
+    <div id="message-box" class="ui-element">
+        <div id="message-text">The nest is on the highest branch!<br>Keep up and rescue the chicks!</div>
+        <button id="start-button">Start Game</button>
+    </div>
+</div>
+
+<script>
+    // --- SETUP ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const messageBox = document.getElementById('message-box');
+    const messageText = document.getElementById('message-text');
+    const startButton = document.getElementById('start-button');
+
+    let gameActive = false;
+    let animationFrameId;
+
+    // --- AUDIO SETUP ---
+    const sounds = {
+        flap: new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.01, decay: 0.1, sustain: 0, release: 0.1 } }).toDestination(),
+        catch: new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.2 } }).toDestination(),
+        score: new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.01, decay: 0.3, sustain: 0, release: 0.3 } }).toDestination(),
+        nestMove: new Tone.Synth({ oscillator: { type: 'sawtooth' }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.1, release: 0.2 } }).toDestination(),
+    };
+    Object.values(sounds).forEach(s => s.volume.value = -12);
+
+    // --- GAME CONFIGURATION ---
+    const config = {
+        gravity: 0.2,
+        flapForce: -5.5,
+        horizontalFlap: 3.0,
+        swoopForce: 0.4,
+        chickSpawnRate: 300,
+        cameraCatchUpSpeed: 0.05,
+        branchGrowthRate: 1.0,
+    };
+
+    let score = 0;
+    let cameraY = 0;
+    let frameCount = 0;
+
+    // --- GAME OBJECTS ---
+    let player, nest, chicks, particles, branches;
+
+    // Player Object
+    const playerProto = {
+        x: 150, y: 200, width: 60, height: 40, dx: 0, dy: 0,
+        isCarryingChick: false, carriedChick: null, isSwooping: false,
+        flapState: 0, flapCounter: 0,
+        draw() {
+            ctx.save();
+            ctx.translate(this.x, this.y - cameraY);
+            const wingAngle = this.isSwooping ? 0 : (this.flapState === 0 ? Math.PI / 8 : -Math.PI / 8);
+            ctx.fillStyle = '#FFFFFF'; ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(-20, 0); ctx.quadraticCurveTo(0, 20, 25, 0);
+            ctx.quadraticCurveTo(15, -20, 0, -5); ctx.quadraticCurveTo(-10, -5, -20, 0);
+            ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(18, -8, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#FFC107'; ctx.strokeStyle = '#E65100';
+            ctx.beginPath(); ctx.moveTo(25, -10); ctx.lineTo(35, -8); ctx.lineTo(25, -6); ctx.closePath();
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#333'; ctx.beginPath(); ctx.arc(20, -10, 2, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#E0E0E0'; ctx.strokeStyle = '#333';
+            ctx.beginPath(); ctx.moveTo(-5, 0); ctx.quadraticCurveTo(-30, -10 + wingAngle * 10, -45, 10); ctx.quadraticCurveTo(-20, 10, -5, 0); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(-25, -15 - wingAngle * 10, -40, 5); ctx.quadraticCurveTo(-15, 5, 0, 0); ctx.fill(); ctx.stroke();
+            ctx.restore();
+        },
+        update() {
+            this.dy += this.isSwooping ? config.swoopForce : config.gravity;
+            this.y += this.dy; this.x += this.dx;
+            this.dx *= 0.98;
+            if (++this.flapCounter % 10 === 0) this.flapState = 1 - this.flapState;
+            if (this.x - this.width / 2 < 0) { this.x = this.width / 2; this.dx = 0; }
+            if (this.x + this.width / 2 > canvas.width) { this.x = canvas.width - this.width / 2; this.dx = 0; }
+            if (this.isCarryingChick && this.carriedChick) {
+                this.carriedChick.x = this.x; this.carriedChick.y = this.y + 25;
+            }
+        },
+        flap(direction) {
+            if (this.isSwooping) return;
+            this.dy = config.flapForce; this.dx += direction * config.horizontalFlap;
+            sounds.flap.triggerAttackRelease('C5', '8n');
+        }
+    };
+
+    // Branch Object
+    function createBranch(parent) {
+        const side = Math.random() > 0.5 ? 1 : -1;
+        const angleChange = (Math.random() * 0.8 + 0.4); // Radians, approx 22 to 68 degrees
+        return {
+            x1: parent.x2, y1: parent.y2,
+            angle: parent.angle + side * angleChange,
+            length: 0,
+            maxLength: Math.random() * 120 + 80,
+            thickness: Math.max(2, parent.thickness * 0.85),
+            growing: true,
+            get x2() { return this.x1 + Math.cos(this.angle) * this.length; },
+            get y2() { return this.y1 + Math.sin(this.angle) * this.length; },
+            update() {
+                if (this.growing && this.length < this.maxLength) {
+                    this.length += config.branchGrowthRate;
+                } else if (this.growing) {
+                    this.growing = false;
+                    if (this.thickness > 4) {
+                        branches.push(createBranch(this));
+                        if (Math.random() > 0.6) {
+                            branches.push(createBranch(this));
+                        }
+                    }
+                }
+            },
+            draw() {
+                ctx.strokeStyle = '#5D4037';
+                ctx.lineWidth = this.thickness;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(this.x1, this.y1 - cameraY);
+                ctx.lineTo(this.x2, this.y2 - cameraY);
+                ctx.stroke();
+                if (this.growing) {
+                    ctx.fillStyle = '#66BB6A';
+                    ctx.beginPath();
+                    ctx.arc(this.x2, this.y2 - cameraY, this.thickness / 2 + 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        };
+    }
+
+    // Nest Object
+    const nestProto = {
+        x: 0, y: 0, width: 100, height: 50, attachedBranch: null,
+        update() {
+            if (this.attachedBranch) {
+                this.x = this.attachedBranch.x2; this.y = this.attachedBranch.y2;
+            }
+        },
+        draw() {
+            const drawY = this.y - cameraY;
+            ctx.fillStyle = '#8D6E63'; ctx.strokeStyle = '#5D4037'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(this.x - 50, drawY);
+            ctx.quadraticCurveTo(this.x, drawY + 50, this.x + 50, drawY);
+            ctx.quadraticCurveTo(this.x, drawY + 20, this.x - 50, drawY);
+            ctx.fill(); ctx.stroke();
+        }
+    };
+
+    // Chick Object
+    function createChick(x, y) {
+        return {
+            x, y, width: 20, height: 20, dy: 0, isFalling: true,
+            draw() {
+                ctx.fillStyle = '#FFEB3B'; ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(this.x, this.y - cameraY, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = '#333'; ctx.beginPath(); ctx.arc(this.x + 3, this.y - 2 - cameraY, 1.5, 0, Math.PI * 2); ctx.fill();
+            },
+            update() { if (this.isFalling) { this.dy += config.gravity / 2; this.y += this.dy; } }
+        };
+    }
+    
+    // --- UTILITY & HELPER FUNCTIONS ---
+    function createParticle(x, y) {
+        return {
+            x, y,
+            dx: (Math.random() - 0.5) * 4,
+            dy: (Math.random() - 0.5) * 4,
+            life: 50,
+            size: Math.random() * 5 + 2,
+            color: `hsl(${Math.random() * 60 + 20}, 100%, 70%)`,
+            update() { this.x += this.dx; this.y += this.dy; this.life--; },
+            draw() { 
+                ctx.fillStyle = this.color; 
+                ctx.beginPath(); 
+                ctx.arc(this.x, this.y - cameraY, this.size, 0, Math.PI * 2); 
+                ctx.fill(); 
+            }
+        };
+    }
+
+    function createExplosion(x, y) {
+        for (let i = 0; i < 20; i++) {
+            particles.push(createParticle(x, y));
+        }
+    }
+
+    function isColliding(rect1, rect2) {
+        return rect1.x < rect2.x + rect2.width &&
+               rect1.x + rect1.width > rect2.x &&
+               rect1.y < rect2.y + rect2.height &&
+               rect1.y + rect1.height > rect2.y;
+    }
+
+    function resizeCanvas() { canvas.width = Math.min(window.innerWidth * 0.9, 800); canvas.height = Math.min(window.innerHeight * 0.9, 600); }
+
+    function init() {
+        resizeCanvas();
+        player = Object.create(playerProto);
+        player.x = canvas.width / 2;
+        player.y = canvas.height - 200;
+        
+        const trunk = {
+            x1: canvas.width / 2, y1: canvas.height,
+            angle: -Math.PI / 2,
+            length: 150, 
+            maxLength: 200,
+            thickness: 20,
+            growing: true,
+            get x2() { return this.x1 + Math.cos(this.angle) * this.length; },
+            get y2() { return this.y1 + Math.sin(this.angle) * this.length; },
+            update() {
+                if (this.growing && this.length < this.maxLength) {
+                    this.length += config.branchGrowthRate * 3;
+                } else if (this.growing) {
+                    this.growing = false;
+                    branches.push(createBranch(this));
+                }
+            },
+            draw() {
+                ctx.strokeStyle = '#5D4037';
+                ctx.lineWidth = this.thickness;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(this.x1, this.y1 - cameraY);
+                ctx.lineTo(this.x2, this.y2 - cameraY);
+                ctx.stroke();
+                if (this.growing) {
+                    ctx.fillStyle = '#66BB6A';
+                    ctx.beginPath();
+                    ctx.arc(this.x2, this.y2 - cameraY, this.thickness / 2 + 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        };
+        branches = [trunk];
+
+        nest = Object.create(nestProto);
+        nest.attachedBranch = trunk;
+
+        chicks = []; 
+        particles = [];
+        
+        nest.update();
+        chicks.push(createChick(nest.x, nest.y));
+
+        score = 0; 
+        cameraY = 0;
+        frameCount = 0;
+        scoreEl.textContent = score;
+        gameActive = true;
+        
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        gameLoop();
+    }
+    
+    function gameOver(reason) {
+        gameActive = false;
+        cancelAnimationFrame(animationFrameId);
+        messageText.innerHTML = `Game Over!<br>${reason}<br>Final Score: ${score}`;
+        startButton.textContent = 'Play Again';
+        messageBox.style.display = 'flex';
+    }
+
+    // --- MAIN GAME LOOP ---
+    function gameLoop() {
+        if (!gameActive) return;
+
+        // 1. UPDATE STATE
+        frameCount++;
+        player.update();
+        branches.forEach(b => b.update());
+        
+        // FIX: Find the highest growing branch and attach the nest to it.
+        let highestBranch = nest.attachedBranch;
+        for (const branch of branches) {
+            if (branch.y2 < highestBranch.y2) {
+                highestBranch = branch;
+            }
+        }
+        if (nest.attachedBranch !== highestBranch) {
+            nest.attachedBranch = highestBranch;
+            sounds.nestMove.triggerAttackRelease('A4', '8n');
+        }
+
+        nest.update();
+        particles.forEach((p, i) => {
+            p.update();
+            if (p.life <= 0) particles.splice(i, 1);
+        });
+        
+        const cameraTargetY = player.y - canvas.height * 0.6;
+        cameraY += (cameraTargetY - cameraY) * config.cameraCatchUpSpeed;
+        
+        if (frameCount % config.chickSpawnRate === 0) {
+            chicks.push(createChick(nest.x, nest.y));
+        }
+        
+        for (let i = chicks.length - 1; i >= 0; i--) {
+            const chick = chicks[i];
+            chick.update();
+            if (chick.y > cameraY + canvas.height) { gameOver("A chick was lost!"); return; }
+            if (chick.isFalling && !player.isCarryingChick && isColliding(
+                { x: player.x - player.width/2, y: (player.y - cameraY) - player.height/2, width: player.width, height: player.height }, 
+                { x: chick.x - chick.width/2, y: (chick.y - cameraY) - chick.height/2, width: chick.width, height: chick.height }
+            )) {
+                player.isCarryingChick = true; player.carriedChick = chick; chick.isFalling = false;
+                sounds.catch.triggerAttackRelease('E5', '8n');
+            }
+        }
+        
+        if (player.isCarryingChick && isColliding(
+            { x: player.x - player.width/2, y: (player.y - cameraY) - player.height/2, width: player.width, height: player.height }, 
+            { x: nest.x - nest.width/2, y: (nest.y - cameraY) - nest.height/2, width: nest.width, height: nest.height }
+        )) {
+            score++; scoreEl.textContent = score;
+            createExplosion(player.carriedChick.x, player.carriedChick.y);
+            const chickIndex = chicks.indexOf(player.carriedChick);
+            if (chickIndex > -1) chicks.splice(chickIndex, 1);
+            player.isCarryingChick = false; player.carriedChick = null;
+            sounds.score.triggerAttackRelease('G5', '8n', Tone.now());
+        }
+
+        if (player.y > cameraY + canvas.height) { gameOver("You fell too far!"); return; }
+
+        // 2. DRAW EVERYTHING
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        branches.forEach(b => b.draw());
+        nest.draw();
+        chicks.forEach(chick => chick.draw());
+        player.draw();
+        particles.forEach(p => p.draw());
+
+        // 3. REQUEST NEXT FRAME
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
+
+    // --- EVENT LISTENERS ---
+    window.addEventListener('keydown', (e) => {
+        if (!gameActive) return;
+        if (e.key === 'ArrowRight') player.flap(1);
+        else if (e.key === 'ArrowLeft') player.flap(-1);
+        else if (e.key === ' ' || e.key === 'Spacebar') player.isSwooping = true;
+    });
+    window.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Spacebar') player.isSwooping = false; });
+    startButton.addEventListener('click', async () => {
+        if (Tone.context.state !== 'running') {
+            await Tone.start();
+        }
+        messageBox.style.display = 'none';
+        init();
+    });
+    window.addEventListener('resize', () => { resizeCanvas(); if (!gameActive) { messageBox.style.display = 'flex'; } });
+    window.onload = () => { resizeCanvas(); };
+</script>
+
+</body>
+</html>
