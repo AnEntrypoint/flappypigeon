@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Treetop Rescue Game</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,7 +28,9 @@
             top: 50%; left: 50%; transform: translate(-50%, -50%);
             background-color: rgba(0, 0, 0, 0.7); padding: 20px 40px; border-radius: 15px;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            font-size: 1.5rem; line-height: 1.5; z-index: 10;
+            font-size: 1.2rem; /* Adjusted for mobile */
+            line-height: 1.5; z-index: 10;
+            width: 80%;
         }
         #message-box button {
             font-family: 'Fredoka One', cursive; font-size: 1.2rem; padding: 10px 20px; margin-top: 20px;
@@ -44,7 +46,10 @@
     <canvas id="gameCanvas"></canvas>
     <div id="score" class="ui-element">0</div>
     <div id="message-box" class="ui-element">
-        <div id="message-text">The nest is on the highest branch!<br>Keep up and rescue the chicks!</div>
+        <div id="message-text">
+            <b>Desktop:</b> Left/Right Arrows to flap. Spacebar to Dive.<br><br>
+            <b>Mobile:</b> Tap Left/Right to flap. Two-finger tap to Dive.
+        </div>
         <button id="start-button">Start Game</button>
     </div>
 </div>
@@ -67,15 +72,19 @@
         catch: new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.2 } }).toDestination(),
         score: new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.01, decay: 0.3, sustain: 0, release: 0.3 } }).toDestination(),
         nestMove: new Tone.Synth({ oscillator: { type: 'sawtooth' }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.1, release: 0.2 } }).toDestination(),
+        swoop: new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.01, decay: 0.3, sustain: 0, release: 0.1 } }).toDestination(),
     };
-    Object.values(sounds).forEach(s => s.volume.value = -12);
+    Object.values(sounds).forEach(s => s.volume.value = -15);
+    sounds.swoop.volume.value = -20;
+
 
     // --- GAME CONFIGURATION ---
     const config = {
         gravity: 0.2,
         flapForce: -5.5,
         horizontalFlap: 3.0,
-        swoopForce: 0.4,
+        swoopForce: 0.6, // Increased dive force
+        chickGravity: 0.15, // Chicks fall faster
         chickSpawnRate: 300,
         cameraCatchUpSpeed: 0.05,
         branchGrowthRate: 1.0,
@@ -86,7 +95,7 @@
     let frameCount = 0;
 
     // --- GAME OBJECTS ---
-    let player, nest, chicks, particles, branches;
+    let player, nest, chicks, particles, branches, speedLines;
 
     // Player Object
     const playerProto = {
@@ -94,7 +103,6 @@
         isCarryingChick: false, carriedChick: null, isSwooping: false,
         flapState: 0, flapCounter: 0,
         draw() {
-            // Draw duplicate player on other side of screen for seamless wrap
             for (let i = -1; i <= 1; i++) {
                 ctx.save();
                 ctx.translate(this.x + i * canvas.width, this.y - cameraY);
@@ -131,6 +139,13 @@
             if (this.isSwooping) return;
             this.dy = config.flapForce; this.dx += direction * config.horizontalFlap;
             sounds.flap.triggerAttackRelease('C5', '8n');
+        },
+        setSwooping(state) {
+            if (this.isSwooping === state) return;
+            this.isSwooping = state;
+            if (state) {
+                sounds.swoop.triggerAttackRelease("4n");
+            }
         }
     };
 
@@ -145,7 +160,7 @@
             side = -1; // Force growth to the left
         }
 
-        const angleChange = (Math.random() * 0.8 + 0.4); // Radians, approx 22 to 68 degrees
+        const angleChange = (Math.random() * 0.8 + 0.4);
         return {
             x1: parent.x2, y1: parent.y2,
             angle: parent.angle + side * angleChange,
@@ -160,7 +175,6 @@
                     this.length += config.branchGrowthRate;
                 } else if (this.growing) {
                     this.growing = false;
-                    // FIX: Removed the thickness check to allow for infinite growth.
                     branches.push(createBranch(this));
                     if (Math.random() > 0.6) {
                         branches.push(createBranch(this));
@@ -220,7 +234,7 @@
             },
             update() { 
                 if (this.isFalling) { 
-                    this.dy += config.gravity / 2; 
+                    this.dy += config.chickGravity; 
                     this.y += this.dy; 
                 }
                 if (this.x < 0) this.x += canvas.width;
@@ -229,6 +243,31 @@
         };
     }
     
+    // Speed Line Object for dive effect
+    function createSpeedLine() {
+        return {
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            length: Math.random() * 20 + 10,
+            speed: Math.random() * 10 + 10,
+            update() {
+                this.y += this.speed;
+                if (this.y > canvas.height) {
+                    this.y = 0;
+                    this.x = Math.random() * canvas.width;
+                }
+            },
+            draw() {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x, this.y - this.length);
+                ctx.stroke();
+            }
+        };
+    }
+
     // --- UTILITY & HELPER FUNCTIONS ---
     function createParticle(x, y) {
         return {
@@ -267,7 +306,7 @@
         return false;
     }
 
-    function resizeCanvas() { canvas.width = Math.min(window.innerWidth * 0.9, 800); canvas.height = Math.min(window.innerHeight * 0.9, 600); }
+    function resizeCanvas() { canvas.width = Math.min(window.innerWidth, 800); canvas.height = Math.min(window.innerHeight, 600); }
 
     function init() {
         resizeCanvas();
@@ -315,6 +354,7 @@
 
         chicks = []; 
         particles = [];
+        speedLines = Array.from({ length: 30 }, createSpeedLine);
         
         nest.update();
         chicks.push(createChick(nest.x, nest.y));
@@ -362,6 +402,10 @@
             p.update();
             if (p.life <= 0) particles.splice(i, 1);
         });
+
+        if (player.isSwooping) {
+            speedLines.forEach(sl => sl.update());
+        }
         
         const cameraTargetY = player.y - canvas.height * 0.6;
         cameraY += (cameraTargetY - cameraY) * config.cameraCatchUpSpeed;
@@ -379,7 +423,14 @@
         for (let i = chicks.length - 1; i >= 0; i--) {
             const chick = chicks[i];
             chick.update();
-            if (chick.y > cameraY + canvas.height) { gameOver("A chick was lost!"); return; }
+            
+            // FIX: Game over only if chick is far below the screen
+            const chickLossBuffer = 400; // Grace area below the screen
+            if (chick.y > cameraY + canvas.height + chickLossBuffer) {
+                gameOver("A chick was lost!");
+                return;
+            }
+
             if (chick.isFalling && !player.isCarryingChick && isColliding(
                 { x: player.x - player.width/2, y: (player.y - cameraY) - player.height/2, width: player.width, height: player.height }, 
                 { x: chick.x - chick.width/2, y: (chick.y - cameraY) - chick.height/2, width: chick.width, height: chick.height }
@@ -407,6 +458,11 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         branches.forEach(b => b.draw());
         nest.draw();
+        
+        if (player.isSwooping) {
+            speedLines.forEach(sl => sl.draw());
+        }
+
         chicks.forEach(chick => chick.draw());
         player.draw();
         particles.forEach(p => p.draw());
@@ -416,13 +472,46 @@
     }
 
     // --- EVENT LISTENERS ---
+    // Keyboard Controls
     window.addEventListener('keydown', (e) => {
         if (!gameActive) return;
         if (e.key === 'ArrowRight') player.flap(1);
         else if (e.key === 'ArrowLeft') player.flap(-1);
-        else if (e.key === ' ' || e.key === 'Spacebar') player.isSwooping = true;
+        else if (e.key === ' ' || e.key === 'Spacebar') player.setSwooping(true);
     });
-    window.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Spacebar') player.isSwooping = false; });
+    window.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Spacebar') player.setSwooping(false); });
+    
+    // Touch Controls
+    function handleTouchStart(e) {
+        if (!gameActive) return;
+        e.preventDefault();
+        
+        if (e.touches.length >= 2) {
+            player.setSwooping(true);
+            return;
+        }
+
+        const touchX = e.touches[0].clientX;
+        const screenWidth = window.innerWidth;
+
+        if (touchX < screenWidth / 2) {
+            player.flap(-1); // Flap left
+        } else {
+            player.flap(1); // Flap right
+        }
+    }
+
+    function handleTouchEnd(e) {
+        e.preventDefault();
+        if (player.isSwooping && e.touches.length < 2) {
+            player.setSwooping(false);
+        }
+    }
+
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+
+
     startButton.addEventListener('click', async () => {
         if (Tone.context.state !== 'running') {
             await Tone.start();
