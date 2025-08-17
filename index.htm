@@ -93,6 +93,7 @@
     let score = 0;
     let cameraY = 0;
     let frameCount = 0;
+    let worldBottomY;
 
     // --- GAME OBJECTS ---
     let player, nest, chicks, particles, branches, speedLines;
@@ -310,12 +311,13 @@
 
     function init() {
         resizeCanvas();
+        worldBottomY = canvas.height;
         player = Object.create(playerProto);
         player.x = canvas.width / 2;
         player.y = canvas.height - 200;
         
         const trunk = {
-            x1: canvas.width / 2, y1: canvas.height,
+            x1: canvas.width / 2, y1: worldBottomY,
             angle: -Math.PI / 2,
             length: 150, 
             maxLength: 200,
@@ -424,9 +426,7 @@
             const chick = chicks[i];
             chick.update();
             
-            // FIX: Game over only if chick is far below the screen
-            const chickLossBuffer = 400; // Grace area below the screen
-            if (chick.y > cameraY + canvas.height + chickLossBuffer) {
+            if (chick.y > worldBottomY) {
                 gameOver("A chick was lost!");
                 return;
             }
@@ -452,7 +452,7 @@
             sounds.score.triggerAttackRelease('G5', '8n', Tone.now());
         }
 
-        if (player.y > cameraY + canvas.height) { gameOver("You fell too far!"); return; }
+        if (player.y > worldBottomY) { gameOver("You fell too far!"); return; }
 
         // 2. DRAW EVERYTHING
         ctx.clearRect(0, 0, canvas.width, canvas.height);
