@@ -311,13 +311,13 @@
 
     function init() {
         resizeCanvas();
-        worldBottomY = canvas.height;
+        worldBottomY = canvas.height + 300;
         player = Object.create(playerProto);
         player.x = canvas.width / 2;
         player.y = canvas.height - 200;
         
         const trunk = {
-            x1: canvas.width / 2, y1: worldBottomY,
+            x1: canvas.width / 2, y1: canvas.height,
             angle: -Math.PI / 2,
             length: 150, 
             maxLength: 200,
