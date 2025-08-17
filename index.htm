@@ -92,8 +92,10 @@
 
     let score = 0;
     let cameraY = 0;
-    let frameCount = 0;
+    let chickSpawnTimer = 0;
     let worldBottomY;
+    let lastTime = 0;
+    let deltaTime = 1;
 
     // --- GAME OBJECTS ---
     let player, nest, chicks, particles, branches, speedLines;
@@ -102,7 +104,7 @@
     const playerProto = {
         x: 150, y: 200, width: 60, height: 40, dx: 0, dy: 0,
         isCarryingChick: false, carriedChick: null, isSwooping: false,
-        flapState: 0, flapCounter: 0,
+        flapState: 0, flapTimer: 0,
         draw() {
             for (let i = -1; i <= 1; i++) {
                 ctx.save();
@@ -124,10 +126,16 @@
             }
         },
         update() {
-            this.dy += this.isSwooping ? config.swoopForce : config.gravity;
-            this.y += this.dy; this.x += this.dx;
-            this.dx *= 0.98;
-            if (++this.flapCounter % 10 === 0) this.flapState = 1 - this.flapState;
+            this.dy += (this.isSwooping ? config.swoopForce : config.gravity) * deltaTime;
+            this.y += this.dy * deltaTime;
+            this.x += this.dx * deltaTime;
+            this.dx *= Math.pow(0.98, deltaTime);
+
+            this.flapTimer += deltaTime;
+            if (this.flapTimer > 6) {
+                this.flapState = 1 - this.flapState;
+                this.flapTimer = 0;
+            }
             
             if (this.x < 0) this.x += canvas.width;
             if (this.x > canvas.width) this.x -= canvas.width;
@@ -173,7 +181,7 @@
             get y2() { return this.y1 + Math.sin(this.angle) * this.length; },
             update() {
                 if (this.growing && this.length < this.maxLength) {
-                    this.length += config.branchGrowthRate;
+                    this.length += config.branchGrowthRate * deltaTime;
                 } else if (this.growing) {
                     this.growing = false;
                     branches.push(createBranch(this));
@@ -235,8 +243,8 @@
             },
             update() { 
                 if (this.isFalling) { 
-                    this.dy += config.chickGravity; 
-                    this.y += this.dy; 
+                    this.dy += config.chickGravity * deltaTime;
+                    this.y += this.dy * deltaTime;
                 }
                 if (this.x < 0) this.x += canvas.width;
                 if (this.x > canvas.width) this.x -= canvas.width;
@@ -252,7 +260,7 @@
             length: Math.random() * 20 + 10,
             speed: Math.random() * 10 + 10,
             update() {
-                this.y += this.speed;
+                this.y += this.speed * deltaTime;
                 if (this.y > canvas.height) {
                     this.y = 0;
                     this.x = Math.random() * canvas.width;
@@ -278,7 +286,7 @@
             life: 50,
             size: Math.random() * 5 + 2,
             color: `hsl(${Math.random() * 60 + 20}, 100%, 70%)`,
-            update() { this.x += this.dx; this.y += this.dy; this.life--; },
+            update() { this.x += this.dx * deltaTime; this.y += this.dy * deltaTime; this.life -= deltaTime; },
             draw() { 
                 ctx.fillStyle = this.color; 
                 ctx.beginPath(); 
@@ -327,7 +335,7 @@
             get y2() { return this.y1 + Math.sin(this.angle) * this.length; },
             update() {
                 if (this.growing && this.length < this.maxLength) {
-                    this.length += config.branchGrowthRate * 3;
+                    this.length += config.branchGrowthRate * 3 * deltaTime;
                 } else if (this.growing) {
                     this.growing = false;
                     branches.push(createBranch(this));
@@ -363,9 +371,10 @@
 
         score = 0; 
         cameraY = 0;
-        frameCount = 0;
+        chickSpawnTimer = config.chickSpawnRate;
         scoreEl.textContent = score;
         gameActive = true;
+        lastTime = performance.now();
         
         if (animationFrameId) cancelAnimationFrame(animationFrameId);
         gameLoop();
@@ -383,8 +392,12 @@
     function gameLoop() {
         if (!gameActive) return;
 
+        const now = performance.now();
+        // Normalize to 60 FPS baseline, and clamp to prevent physics bugs from extreme lag
+        deltaTime = Math.max(0.1, Math.min(2, (now - lastTime) / (1000 / 60)));
+        lastTime = now;
+
         // 1. UPDATE STATE
-        frameCount++;
         player.update();
         branches.forEach(b => b.update());
         
@@ -410,10 +423,12 @@
         }
         
         const cameraTargetY = player.y - canvas.height * 0.6;
-        cameraY += (cameraTargetY - cameraY) * config.cameraCatchUpSpeed;
+        cameraY += (cameraTargetY - cameraY) * config.cameraCatchUpSpeed * deltaTime;
         
-        if (frameCount % config.chickSpawnRate === 0) {
+        chickSpawnTimer -= deltaTime;
+        if (chickSpawnTimer <= 0) {
             chicks.push(createChick(nest.x, nest.y));
+            chickSpawnTimer = config.chickSpawnRate;
         }
         
         const pruneBuffer = 200;
